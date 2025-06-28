@@ -1,0 +1,3 @@
+boto3==1.34.131
+botocore==1.34.131
+aiohttp==3.9.5

@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  message-status:
+    build: .
+    container_name: message-status-local
+    environment:
+      - AWS_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - STATUS_UPDATE_QUEUE_URL=${STATUS_UPDATE_QUEUE_URL}
+      - DLQ_URL=${DLQ_URL}
+      - EVENT_QUEUE_URL=${EVENT_QUEUE_URL}
+      - POLL_INTERVAL=10
+      - MAX_MESSAGES=10
+      - LOG_LEVEL=INFO
+    restart: unless-stopped
+    volumes:
+      - ./src:/app
+    # 如果需要本地開發，可以覆蓋命令
+    # command: ["python", "app.py"]
