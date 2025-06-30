@@ -254,17 +254,13 @@ class MessageStatusProcessor:
 
     async def poll_queue(self, queue_url: str, queue_name: str) -> None:
         """
-        非同步輪詢指定的 SQS 佇列
-        
+        非同步輪詢指定的 SQS 佇列，並行查詢原始訊息以提升效能
         Args:
             queue_url: SQS 佇列 URL
             queue_name: 佇列名稱 (用於日誌)
         """
         try:
-            # 使用 asyncio 執行 SQS 操作
             loop = asyncio.get_event_loop()
-            
-            # 接收訊息
             response = await loop.run_in_executor(
                 None,
                 lambda: self.sqs.receive_message(
@@ -274,40 +270,46 @@ class MessageStatusProcessor:
                     VisibilityTimeout=300  # 5 分鐘
                 )
             )
-            
             messages = response.get('Messages', [])
             if not messages:
                 logger.debug(f"從 {queue_name} 沒有接收到訊息")
                 return
-                
             logger.info(f"從 {queue_name} 接收到 {len(messages)} 個訊息")
-            
-            processed_messages = []
-            receipt_handles = []
-            
-            # 處理每個訊息
+
+            # 1. 收集所有 sns_id 與 MessageId
+            sns_id_list = []
+            message_id_list = []
             for message in messages:
                 message_data = json.loads(message['Body']) if isinstance(message['Body'], str) else message['Body']
-                
-                # 檢查是否需要重試
+                sns_id_list.append(message_data.get('sns_id'))
+                message_id_list.append(message.get('MessageId'))
+
+            # 2. 批次並行查詢原始訊息
+            query_tasks = [
+                asyncio.create_task(self.query_original_message(sns_id, sqs_message_id))
+                for sns_id, sqs_message_id in zip(sns_id_list, message_id_list)
+            ]
+            original_message_list = await asyncio.gather(*query_tasks)
+
+            processed_messages = []
+            receipt_handles = []
+
+            # 3. 處理每個訊息，與查詢結果一一對應
+            for idx, message in enumerate(messages):
+                message_data = json.loads(message['Body']) if isinstance(message['Body'], str) else message['Body']
+                original_message = original_message_list[idx]
                 should_retry = (
                     message_data.get('delivery_status') == 'FAILURE' or 
                     queue_name == 'DLQ'
                 )
-                
                 sns_id = message_data.get('sns_id')
-                original_message = await self.query_original_message(sns_id, message.get('MessageId'))
-                
                 # 如果原始訊息不存在，則記錄警告並跳過，並且不刪除訊息
                 if not original_message:
                     logger.warning(f"無法查詢到原始訊息，SNS ID: {sns_id}，跳過處理此訊息")
                     continue
-                
                 if should_retry:
                     current_retry_cnt = original_message.get('retry_cnt')
-                    
                     if current_retry_cnt < self.max_retry_cnt:
-                        # 查詢原始訊息並發送重試
                         if sns_id:
                             if original_message:
                                 retry_success = await self.send_retry_message(
@@ -315,33 +317,26 @@ class MessageStatusProcessor:
                                     current_retry_cnt + 1
                                 )
                                 if retry_success:
-                                    logger.info(f"已發送重試訊息到 PushQueue，Transaction ID: {original_message.transaction_id}, 重試次數: {current_retry_cnt + 1}")
+                                    logger.info(f"已發送重試訊息到 PushQueue，Transaction ID: {original_message.get('transaction_id')}, 重試次數: {current_retry_cnt + 1}")
                                 else:
                                     logger.error(f"重試訊息發送失敗，SNS ID: {sns_id}")
                     else:
-                        logger.warning(f"訊息已達最大重試次數 {self.max_retry_cnt}，SNS ID: {message_data.get('sns_id')} ; Transaction ID: {original_message.transaction_id}")
-
-                # 處理訊息並加入到 EventQueue
+                        logger.warning(f"訊息已達最大重試次數 {self.max_retry_cnt}，SNS ID: {message_data.get('sns_id')} ; Transaction ID: {original_message.get('transaction_id')}")
                 processed_message = self.process_message(message['Body'], queue_name, original_message)
                 if processed_message:
                     processed_messages.append(processed_message)
                     receipt_handles.append(message['ReceiptHandle'])
                 else:
-                    # 如果處理失敗，仍然刪除訊息以避免無限重試
                     receipt_handles.append(message['ReceiptHandle'])
-            
             # 發送到 EventQueue
             if processed_messages:
                 success = await self.send_to_event_queue_async(processed_messages)
                 if success:
-                    # 只有在成功發送到 EventQueue 後才刪除原始訊息
                     await self.delete_messages_async(queue_url, receipt_handles, queue_name)
                 else:
                     logger.error(f"無法發送訊息到 EventQueue，保留 {queue_name} 中的訊息")
             else:
-                # 即使沒有成功處理的訊息，也刪除有問題的訊息
                 await self.delete_messages_async(queue_url, receipt_handles, queue_name)
-                
         except ClientError as e:
             logger.error(f"輪詢 {queue_name} 時發生 AWS 錯誤: {str(e)}")
         except Exception as e:
