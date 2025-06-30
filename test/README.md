@@ -10,7 +10,7 @@
 #### 方法一：使用 Web UI（推薦給初學者）
 在 test 資料夾中打開終端機，執行：
 ```powershell
-C:/Users/zsp22/AppData/Local/Programs/Python/Python313/python.exe -m locust -f locustfile.py --host=https://64awf2ej6to4zupffkcwqehvzm0djsnr.lambda-url.ap-southeast-1.on.aws
+python -m locust -f locustfile.py --host=https://64awf2ej6to4zupffkcwqehvzm0djsnr.lambda-url.ap-southeast-1.on.aws
 ```
 
 然後在瀏覽器中打開 http://localhost:8089，您會看到 Locust 的 Web 介面。

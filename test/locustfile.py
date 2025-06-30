@@ -20,6 +20,9 @@ class LoadTestUser(HttpUser):
     def generate_test_data(self, count=100):
         """生成測試數據，預設100筆"""
         data = []
+        # 生成約341KB的填充數據 (每個字符約1byte)
+        filler = "X" * 700  
+        
         for i in range(count):
             item = {
                 "ap_id": "MID-LX-LNK-01",
@@ -30,8 +33,10 @@ class LoadTestUser(HttpUser):
                         "title": "匯款",
                         "body": f"您在 2025/5/29 上午 10:47 匯款成功 (#{i+1})"
                     },
-                    "link": "https://www.example.com/test/path"
-                }            }
+                    "link": filler,
+                    # "data_filler": filler  # 添加填充數據以達到所需大小
+                }
+            }
             data.append(item)
         return data
     
@@ -67,7 +72,7 @@ class LoadTestUser(HttpUser):
     #         else:
     #             response.failure(f"請求失敗: {response.status_code} - {response.text}")
     
-    @task(3)
+    @task(1)
     def send_notification_single(self):
         """發送單筆通知"""
         test_data = self.generate_test_data(1)
